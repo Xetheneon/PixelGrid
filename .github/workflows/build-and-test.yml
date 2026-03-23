@@ -8,11 +8,11 @@ on:
     branches: [ main, development ]
 
 env:
-  # Set this to the FQBN that matches your board (change as needed)
+  # Set this to the FQBN that matches your board (change if needed)
   FQBN: esp32:esp32:esp32
   SKETCH_PATH: Games/Tetris
   BUILD_DIR: build
-  ARDUINO_CLI_VERSION: "0.33.1"  # pinned version used by fallback installer
+  ARDUINO_CLI_VERSION: "0.33.1"  # pinned version used by setup and fallback
 
 jobs:
   arduino-build:
@@ -52,28 +52,30 @@ jobs:
         run: |
           set -e
           arduino-cli core update-index
-          # install esp32 core (change this if you target a different core/provider)
+          # install esp32 core (change if you target a different core/provider)
           arduino-cli core install esp32:esp32 || true
           arduino-cli core list
 
       - name: List available boards (debug)
         run: |
           arduino-cli board listall | sed -n '1,200p' || true
+
       - name: Create temporary NetConfig.h for CI (if missing)
         run: |
           if [ ! -f "${{ env.SKETCH_PATH }}/NetConfig.h" ]; then
-            cat > "${{ env.SKETCH_PATH }}/NetConfig.h" <<'EOF'
-            #ifndef NETCONFIG_H
-            #define NETCONFIG_H
-            #define EAP_IDENTITY "ci-identity"
-            #define EAP_USERNAME "ci-username"
-            #define EAP_PASSWORD "ci-password"
-            #define EDUROAM_SSID  "eduroam"
-            #define API_BASE "https://example.com"
-            #define GAME_SECRET "00000000000000000000000000000000"
-            #define GAME_CODE "TETR"
-            #endif
-            EOF
+            mkdir -p "$(dirname "${{ env.SKETCH_PATH }}/NetConfig.h")"
+            printf '%s\n' \
+              '#ifndef NETCONFIG_H' \
+              '#define NETCONFIG_H' \
+              '#define EAP_IDENTITY "ci-identity"' \
+              '#define EAP_USERNAME "ci-username"' \
+              '#define EAP_PASSWORD "ci-password"' \
+              '#define EDUROAM_SSID  "eduroam"' \
+              '#define API_BASE "https://example.com"' \
+              '#define GAME_SECRET "00000000000000000000000000000000"' \
+              '#define GAME_CODE "TETR"' \
+              '#endif' \
+              > "${{ env.SKETCH_PATH }}/NetConfig.h"
             echo "Wrote temporary NetConfig.h to ${{ env.SKETCH_PATH }}/NetConfig.h"
           else
             echo "NetConfig.h already present in repo; leaving it."
@@ -88,7 +90,6 @@ jobs:
           set -e
           echo "Compiling sketch $SKETCH for FQBN=$FQBN ..."
           mkdir -p "$BUILD"
-          # If you keep libraries in repo/libraries, pass them to arduino-cli
           if [ -d libraries ]; then
             arduino-cli compile --fqbn "$FQBN" "$SKETCH" --build-path "$BUILD" --libraries libraries
           else
