@@ -1,0 +1,53 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache
+            # add language-specific cache paths
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/lockfile*') }}
+
+      - name: Set up environment
+        run: |
+          echo "Install required SDKs / tools here"
+
+      - name: Build
+        run: |
+          # Replace with your build command
+          ./build.sh || (echo "Build failed" && exit 1)
+
+      - name: Run unit tests
+        run: |
+          # Replace with your test command; produce junit XML if possible
+          ./run-tests.sh --junit=report.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: report.xml
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage/
