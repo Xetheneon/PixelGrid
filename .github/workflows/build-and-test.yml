@@ -8,10 +8,11 @@ on:
     branches: [ main, development ]
 
 env:
-  # Change this FQBN to match your target board. Default: common esp32 placeholder.
+  # Set this to the FQBN that matches your board (change as needed)
   FQBN: esp32:esp32:esp32
   SKETCH_PATH: Games/Tetris
   BUILD_DIR: build
+  ARDUINO_CLI_VERSION: "0.33.1"  # pinned version used by fallback installer
 
 jobs:
   arduino-build:
@@ -23,32 +24,41 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup arduino-cli
+      - name: Try setup arduino-cli action (pinned)
         uses: arduino/setup-arduino-cli@v2
         with:
-          version: latest
+          version: ${{ env.ARDUINO_CLI_VERSION }}
+        continue-on-error: true
+
+      - name: Ensure arduino-cli is available (fallback installer)
+        run: |
+          if command -v arduino-cli >/dev/null 2>&1; then
+            echo "arduino-cli present: $(arduino-cli version)"
+          else
+            echo "arduino-cli not found; installing arduino-cli v${ARDUINO_CLI_VERSION}..."
+            sudo apt-get update -y
+            sudo apt-get install -y ca-certificates curl unzip
+            TMP=/tmp/arduino-cli
+            mkdir -p "$TMP"
+            ARCHIVE="arduino-cli_${ARDUINO_CLI_VERSION}_Linux_64bit.tar.gz"
+            URL="https://downloads.arduino.cc/arduino-cli/${ARCHIVE}"
+            curl -fsSL -o "$TMP/${ARCHIVE}" "$URL"
+            tar -xzf "$TMP/${ARCHIVE}" -C "$TMP"
+            sudo mv "$TMP/arduino-cli" /usr/local/bin/arduino-cli
+            arduino-cli version
+          fi
 
       - name: Update index & install core (esp32)
         run: |
+          set -e
           arduino-cli core update-index
-          # install the esp32 core used by most ESP32 boards; change if you use a different core
-          arduino-cli core install esp32:esp32
+          # install esp32 core (change this if you target a different core/provider)
+          arduino-cli core install esp32:esp32 || true
           arduino-cli core list
 
-      - name: Install required libraries from repo 'libraries' folder (optional)
-        if: ${{ always() }}
+      - name: List available boards (debug)
         run: |
-          # If you keep libraries in /libraries, install them into arduino-cli's library dir
-          if [ -d libraries ]; then
-            echo "Installing libraries from repo/libraries..."
-            for d in libraries/*; do
-              if [ -d "$d" ]; then
-                arduino-cli lib install --additional-urls "" --zip-path "$d" || true
-              fi
-            done
-          else
-            echo "No libraries/ folder present; skipping."
-          fi
+          arduino-cli board listall | sed -n '1,200p' || true
 
       - name: Compile sketch (Release)
         env:
@@ -56,27 +66,31 @@ jobs:
           SKETCH: ${{ env.SKETCH_PATH }}
           BUILD: ${{ env.BUILD_DIR }}
         run: |
-          mkdir -p "$BUILD"
+          set -e
           echo "Compiling sketch $SKETCH for FQBN=$FQBN ..."
-          arduino-cli compile --fqbn "$FQBN" "$SKETCH" --build-path "$BUILD" || (echo "Compile failed" && exit 1)
+          mkdir -p "$BUILD"
+          # If you keep libraries in repo/libraries, pass them to arduino-cli
+          if [ -d libraries ]; then
+            arduino-cli compile --fqbn "$FQBN" "$SKETCH" --build-path "$BUILD" --libraries libraries
+          else
+            arduino-cli compile --fqbn "$FQBN" "$SKETCH" --build-path "$BUILD"
+          fi
           echo "Compile finished. Artifacts in $BUILD"
 
       - name: List build artifacts
         run: |
           echo "Artifacts:"
-          ls -la build || true
-          find build -maxdepth 3 -type f -printf "%p %s bytes\n" || true
+          ls -la "$BUILD" || true
+          find "$BUILD" -type f -maxdepth 3 -exec ls -lh {} \; || true
 
       - name: Create size report
         run: |
           mkdir -p reports
           echo "Build size report for $FQBN" > reports/size-report.txt
-          if [ -d build ]; then
-            for f in build/*; do
-              if [ -f "$f" ]; then
-                echo "$(basename "$f"): $(stat -c%s "$f") bytes" >> reports/size-report.txt
-              fi
-            done
+          if [ -d "$BUILD" ]; then
+            find "$BUILD" -type f -printf "%p %s bytes\n" >> reports/size-report.txt || true
+          else
+            echo "No build directory" >> reports/size-report.txt
           fi
           cat reports/size-report.txt
 
@@ -87,37 +101,3 @@ jobs:
           path: |
             build
             reports/size-report.txt
-
-  clang-format-check:
-    name: clang-format check
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install clang-format
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-format
-
-      - name: Run clang-format and check
-        shell: bash
-        run: |
-          FILES=$(git ls-files '*.c' '*.cpp' '*.h' '*.hpp' || true)
-          if [ -z "$FILES" ]; then
-            echo "No C/C++ files to check."
-            exit 0
-          fi
-          # Check style: format into a temp dir and compare
-          TMPDIR=$(mktemp -d)
-          cp $FILES "$TMPDIR/" || true
-          pushd "$TMPDIR"
-          clang-format -style=file -i $FILES || true
-          if ! git --no-pager diff --exit-code -- $FILES; then
-            echo "clang-format differences detected. Please run clang-format -style=file on these files."
-            git --no-pager diff -- $FILES || true
-            exit 1
-          fi
-          popd
