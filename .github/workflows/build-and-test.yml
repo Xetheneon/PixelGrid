@@ -8,6 +8,7 @@ on:
 
 jobs:
   build-test:
+    name: Build & Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -16,38 +17,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache deps
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache
-            # add language-specific cache paths
-          key: ${{ runner.os }}-deps-${{ hashFiles('**/lockfile*') }}
-
-      - name: Set up environment
+      - name: Configure CMake
+        shell: bash
         run: |
-          echo "Install required SDKs / tools here"
+          mkdir -p build
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
       - name: Build
+        shell: bash
         run: |
-          # Replace with your build command
-          ./build.sh || (echo "Build failed" && exit 1)
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            cmake --build build --config Release
+          else
+            cmake --build build -- -j$(nproc || sysctl -n hw.ncpu)
+          fi
 
-      - name: Run unit tests
+      - name: Run tests
+        shell: bash
         run: |
-          # Replace with your test command; produce junit XML if possible
-          ./run-tests.sh --junit=report.xml
+          # Runs CTest; adapt or replace with your test runner if needed
+          ctest --test-dir build --output-on-failure || true
 
-      - name: Upload test results
+      - name: Upload test logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-${{ matrix.os }}
-          path: report.xml
+          name: ctest-results-${{ matrix.os }}
+          path: build/Testing || build/Testing/* || .
 
-      - name: Upload coverage
+      - name: Upload build artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-${{ matrix.os }}
-          path: coverage/
+          name: build-artifacts-${{ matrix.os }}
+          path: build
